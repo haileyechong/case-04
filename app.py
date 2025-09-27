@@ -1,41 +1,36 @@
 from datetime import datetime, timezone
 from flask import Flask, request, jsonify
-from flask_cors import CORS
-from pydantic import ValidationError
-from models import SurveySubmission, StoredSurveyRecord
+from models import SurveySubmission
 from storage import append_json_line
+import hashlib
+
+def sha256_hex(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+
 
 app = Flask(__name__)
-# Allow cross-origin requests so the static HTML can POST from localhost or file://
-CORS(app, resources={r"/v1/*": {"origins": "*"}})
-
-@app.route("/ping", methods=["GET"])
-def ping():
-    """Simple health check endpoint."""
-    return jsonify({
-        "status": "ok",
-        "message": "API is alive",
-        "utc_time": datetime.now(timezone.utc).isoformat()
-    })
 
 @app.post("/v1/survey")
 def submit_survey():
-    payload = request.get_json(silent=True)
-    if payload is None:
-        return jsonify({"error": "invalid_json", "detail": "Body must be application/json"}), 400
+    data = request.get_json(force=True)
 
-    try:
-        submission = SurveySubmission(**payload)
-    except ValidationError as ve:
-        return jsonify({"error": "validation_error", "detail": ve.errors()}), 422
+    # Fill user_agent from headers if not provided (Exercise 11.1)
+    data.setdefault("user_agent", request.headers.get("User-Agent"))
 
-    record = StoredSurveyRecord(
-        **submission.dict(),
-        received_at=datetime.now(timezone.utc),
-        ip=request.headers.get("X-Forwarded-For", request.remote_addr or "")
-    )
-    append_json_line(record.dict())
-    return jsonify({"status": "ok"}), 201
+    sub = SurveySubmission(**data)
 
-if __name__ == "__main__":
-    app.run(port=0, debug=True)
+    # Compute submission_id if missing (Exercise 11.3)
+    now = datetime.now(timezone.utc)
+    ymdh = now.strftime("%Y%m%d%H")
+    submission_id = sub.submission_id or sha256_hex(f"{sub.email}{ymdh}")
+
+    # Keep original field names, just replace PII with hashes (Exercise 11.2)
+    to_store = sub.model_dump()                  # dict with your original keys
+    to_store["email"] = sha256_hex(sub.email)    # same key, hashed value
+    to_store["age"]   = sha256_hex(str(sub.age)) # same key, hashed value
+    to_store["submission_id"] = submission_id
+    to_store["submitted_at"]  = now.isoformat()  # helpful timestamp
+
+    append_json_line(to_store)
+    return jsonify({"ok": True, "submission_id": submission_id})
