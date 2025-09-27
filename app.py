@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from flask import Flask, request, jsonify
+from pydantic import ValidationError
 from models import SurveySubmission
 from storage import append_json_line
 import hashlib
@@ -7,30 +8,40 @@ import hashlib
 def sha256_hex(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
-
-
 app = Flask(__name__)
 
 @app.post("/v1/survey")
 def submit_survey():
-    data = request.get_json(force=True)
+    # 1) Must be JSON or 400 (per tests)
+    if not request.is_json:
+        return jsonify({"error": "requires_json"}), 400
 
-    # Fill user_agent from headers if not provided (Exercise 11.1)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "invalid_json"}), 400
+
+    # 2) Optional user_agent if client omitted it
     data.setdefault("user_agent", request.headers.get("User-Agent"))
 
-    sub = SurveySubmission(**data)
+    # 3) Validate with Pydantic (422 + exact error key)
+    try:
+        sub = SurveySubmission(**data)
+    except ValidationError as e:
+        return jsonify({"error": "validation_error", "details": e.errors()}), 422
 
-    # Compute submission_id if missing (Exercise 11.3)
+    # 4) Compute submission_id if missing: sha256(email + YYYYMMDDHH UTC)
     now = datetime.now(timezone.utc)
     ymdh = now.strftime("%Y%m%d%H")
     submission_id = sub.submission_id or sha256_hex(f"{sub.email}{ymdh}")
 
-    # Keep original field names, just replace PII with hashes (Exercise 11.2)
-    to_store = sub.model_dump()                  # dict with your original keys
-    to_store["email"] = sha256_hex(sub.email)    # same key, hashed value
-    to_store["age"]   = sha256_hex(str(sub.age)) # same key, hashed value
+    # 5) Hash PII (keep same keys) before writing
+    to_store = sub.dict()                      # Pydantic v1
+    to_store["email"] = sha256_hex(sub.email)  # hashed values
+    to_store["age"]   = sha256_hex(str(sub.age))
     to_store["submission_id"] = submission_id
-    to_store["submitted_at"]  = now.isoformat()  # helpful timestamp
+    to_store["submitted_at"]  = now.isoformat()
 
     append_json_line(to_store)
-    return jsonify({"ok": True, "submission_id": submission_id})
+
+    # 6) Success payload/201 exactly as tests expect
+    return jsonify({"status": "ok", "submission_id": submission_id}), 201
