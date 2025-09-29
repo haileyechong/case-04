@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from models import SurveySubmission
 from storage import append_json_line
 import hashlib
+import uuid
 
 def sha256_hex(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
@@ -35,11 +36,13 @@ def submit_survey():
     submission_id = sub.submission_id or sha256_hex(f"{sub.email}{ymdh}")
 
     # 5) Hash PII (keep same keys) before writing
-    to_store = sub.dict()                      # Pydantic v1
-    to_store["email"] = sha256_hex(sub.email)  # hashed values
-    to_store["age"]   = sha256_hex(str(sub.age))
+    to_store = sub.dict()
+    to_store.pop("email", None)
+    to_store.pop("age", None)
+    to_store["email_sha256"] = sha256_hex(sub.email)
+    to_store["age_sha256"] = sha256_hex(str(sub.age))
     to_store["submission_id"] = submission_id
-    to_store["submitted_at"]  = now.isoformat()
+    to_store["submitted_at"] = now.isoformat()
 
     append_json_line(to_store)
 
