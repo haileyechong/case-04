@@ -45,3 +45,6 @@ def submit_survey():
 
     # 6) Success payload/201 exactly as tests expect
     return jsonify({"status": "ok", "submission_id": submission_id}), 201
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
